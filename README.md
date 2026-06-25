@@ -2,9 +2,9 @@
 
 # 🏠 Home Server
 
-**A self-hosted home server running a media-automation stack and containerized apps via Dokploy.**
+**A self-hosted Unraid home server: a media-automation stack, Cloudflare Tunnel + Tailscale networking, Datadog monitoring, and a Dokploy VM for side projects.**
 
-`Ubuntu` · `Docker` · `Dokploy` · `*arr stack` · `Jonsbo N4 NAS`
+`Unraid` · `Docker` · `*arr stack` · `Jellyfin` · `Dokploy` · `Datadog` · `Jonsbo N4 NAS`
 
 </div>
 
@@ -16,11 +16,12 @@
 - [Architecture](#-architecture)
 - [Hardware](#-hardware)
   - [System summary](#system-summary)
+  - [Cooling & airflow](#-cooling--airflow)
   - [Storage layout](#storage-layout)
 - [Software stack](#-software-stack)
   - [Host & virtualization](#host--virtualization)
+  - [Containers](#containers)
   - [Dokploy](#dokploy)
-  - [Service inventory](#service-inventory)
 - [The *arr* media stack](#-the-arr-media-stack)
   - [How the automation flows](#how-the-automation-flows)
 - [Networking & remote access](#-networking--remote-access)
@@ -28,19 +29,16 @@
 - [Backups & data safety](#-backups--data-safety)
 - [Maintenance & operations](#-maintenance--operations)
 - [Reproducing this build](#-reproducing-this-build)
-- [Security checklist](#-security-checklist)
-
-> [!NOTE]
-> Sections tagged **`<!-- FILL IN -->`** are placeholders waiting on live data harvested from the server. Run the commands in [Maintenance & operations](#-maintenance--operations) and [Reproducing this build](#-reproducing-this-build), then drop the real values in.
+- [What's intentionally omitted](#-whats-intentionally-omitted)
 
 ---
 
 ## 🔭 Overview
 
-The host runs **[Unraid OS](https://unraid.net)** — a NAS/server OS built around a flexible, parity-protected storage array with first-class Docker and VM support. On top of it, the server does two jobs:
+The host runs **[Unraid OS](https://unraid.net)** (7.3) — a NAS/server OS built around a flexible, parity-protected storage array with first-class Docker and VM support. On top of it, the server does two jobs:
 
-1. **Media automation + services** — the *"arr"* stack runs directly in **Unraid's Docker**, automatically finding, downloading, organizing, and streaming media. Alongside it, a **`cloudflared`** container provides the reverse proxy / remote access via Cloudflare Tunnel, and a **Datadog agent** container handles monitoring.
-2. **App hosting** — a single **Ubuntu VM** runs [**Dokploy**](#dokploy) (a self-hostable Heroku/Vercel), which deploys side projects: websites, an Obsidian sync server, and similar.
+1. **Media automation + services** — the *"arr"* stack runs directly in **Unraid's Docker**, automatically finding, downloading, organizing, and streaming media through **Jellyfin**. A **`cloudflared`** container publishes selected services via Cloudflare Tunnel, **Tailscale** provides private remote admin, and a **Datadog agent** ships metrics and logs for monitoring.
+2. **App hosting** — a single **Ubuntu VM** runs [**Dokploy**](#dokploy) (a self-hostable Heroku/Vercel), which deploys various personal side projects.
 
 Storage is a **3× 12 TB** parity-protected Unraid array fronted by a 1 TB NVMe **cache** drive — writes land on the SSD and Unraid's **Mover** flushes them to the array nightly. Everything lives in a compact [Jonsbo N4](#system-summary) NAS chassis.
 
@@ -51,51 +49,51 @@ Storage is a **3× 12 TB** parity-protected Unraid array fronted by a 1 TB NVMe 
 ```mermaid
 flowchart TB
   subgraph HOST["🖥 Unraid host — Jonsbo N4"]
-    HW["Core Ultra 7 265K · 32 GB DDR5"] --> UNRAID["Unraid OS"]
+    HW["Core Ultra 7 265K · 32 GB DDR5"] --> UNRAID["Unraid OS 7.3"]
 
     subgraph DOCKER["🐳 Unraid Docker"]
-      ARR["*arr stack<br/>Prowlarr · Sonarr · Radarr …"]
+      ARR["*arr stack<br/>Prowlarr · Sonarr · Radarr · Bazarr<br/>FlareSolverr · Deluge (VPN) · Cleanuparr"]
+      JF["Jellyfin"]
       CF["cloudflared<br/>(Cloudflare Tunnel)"]
       DD["Datadog agent"]
     end
 
     subgraph KVM["🧩 Ubuntu VM (KVM)"]
-      DOK["Dokploy<br/>→ websites, Obsidian sync, side projects"]
+      DOK["Dokploy<br/>→ side projects"]
     end
 
     UNRAID --> DOCKER & KVM
   end
 
   subgraph STORE["💾 Storage"]
-    CACHE["Cache · 1 TB NVMe SSD<br/>(appdata + write landing)"]
-    ARRAY["Array · 2× 12 TB data + 1× 12 TB parity"]
-    CACHE -->|nightly Mover| ARRAY
+    CACHE["Cache · 1 TB NVMe (btrfs)"]
+    ARRAY["Array · 2× 12 TB data + 1 parity (xfs)"]
+    CACHE -->|"Mover · nightly"| ARRAY
   end
 
   ARR --> CACHE
-  CF --> WAN((Internet /<br/>remote access))
+  JF --> ARRAY
+  CF --> WAN((Internet))
   DOK --> WAN
 ```
-
-> Service names get finalized once the [service inventory](#service-inventory) is filled from the live Unraid Docker list.
 
 ---
 
 ## 🔩 Hardware
 
-All component specs below are verified against manufacturer/retailer documentation.
+All component specs below are verified against manufacturer/retailer documentation and the live system.
 
 ### System summary
 
 | Component | Spec | Notes |
 |---|---|---|
 | **CPU** | Intel Core Ultra 7 265K | 20 cores (8 P + 12 E), **20 threads — no Hyperthreading**. 3.9 GHz base / 5.5 GHz boost. LGA1851. 125 W base / 250 W max turbo. |
-| **CPU cooler** | Noctua NH-L9x65 (Brown, 65 mm) | Premium low-profile air cooler. LGA1851 supported. CPU power-limited in BIOS to stay within its envelope — see [cooling & airflow](#-cooling--airflow) below. |
-| **Motherboard** | MSI PRO B860M-A WIFI | Intel B860 chipset, Micro-ATX, LGA1851. 4× DDR5 DIMM (up to 256 GB). Onboard 2.5 GbE + Wi-Fi. |
-| **Memory** | G.Skill Ripjaws S5 32 GB (2×16 GB) | DDR5-5600, CL36. |
-| **Cache drive** | Samsung 990 EVO Plus 1 TB | M.2-2280 NVMe. Hybrid **PCIe 4.0 ×4 / 5.0 ×2** (~7,150 MB/s ceiling). Unraid cache: appdata + write landing zone, flushed to the array nightly. |
-| **Storage array** | 3× 12 TB 3.5" HDD | Unraid array: **1 parity + 2 data** (~24 TB usable, single-drive fault tolerance). <!-- FILL IN: make/model, RPM, NAS-rated? --> |
-| **Boot device** | USB flash drive | Unraid boots from and is licensed to a USB stick. <!-- FILL IN: capacity/model (optional) --> |
+| **CPU cooler** | Noctua NH-L9x65 (Brown, 65 mm) | Premium low-profile air cooler. LGA1851 supported. CPU power-limited in BIOS to stay within its envelope — see [cooling & airflow](#-cooling--airflow). |
+| **Motherboard** | MSI PRO B860M-A WIFI (MS-7E42) | Intel B860 chipset, Micro-ATX, LGA1851. 4× DDR5 DIMM (up to 256 GB). Onboard 2.5 GbE + Wi-Fi. |
+| **Memory** | G.Skill Ripjaws S5 32 GB (2×16 GB) | DDR5-5600, CL36. ~30 GB visible to the OS after firmware/iGPU reservation. |
+| **Cache drive** | Samsung 990 EVO Plus 1 TB | M.2-2280 NVMe. Hybrid **PCIe 4.0 ×4 / 5.0 ×2** (~7,150 MB/s ceiling). Unraid cache (btrfs): appdata + write landing zone. |
+| **Storage array** | 3× 12 TB 3.5" HDD | Mixed NAS drives (Seagate IronWolf / IronWolf Pro + HGST Ultrastar). Unraid array: **1 parity + 2 data** (~24 TB usable, single-drive fault tolerance). |
+| **Boot device** | USB flash (~119 GB) | Unraid boots from and is licensed to the USB stick. |
 | **Power supply** | Lian Li SP850 | 850 W, 80+ Gold, fully modular, **SFX** form factor. |
 | **Case** | Jonsbo N4 | Micro-ATX NAS chassis. 6× 3.5" (4 hot-swap + 2 fixed) + 2× 2.5" = 8 bays. Takes SFX PSU. ⚠️ Poor stock ventilation — see [airflow mod](#-cooling--airflow). |
 | **Case fans** | Noctua NF-A12x25 PWM chromax.black.swap (120 mm)<br/>2× ARCTIC P12 Slim PWM PST (120 mm) | Slim front fans added via a 3D-printed adapter — see below. |
@@ -118,13 +116,17 @@ This build had two cooling considerations, both addressed:
 
 Unraid pools the drives into a single parity-protected array with an SSD cache in front:
 
-| Device | Size | Type | Role | Mounted as |
-|---|---|---|---|---|
-| Cache | 1 TB | NVMe SSD | appdata, Docker, VM image, write cache | `/mnt/cache` |
-| Parity | 12 TB | HDD | Parity — fault tolerance, no usable capacity | — |
-| Disk 1 | 12 TB | HDD | Array data | `/mnt/disk1` |
-| Disk 2 | 12 TB | HDD | Array data | `/mnt/disk2` |
-| User share | ~24 TB | — | Unified view spanning array + cache | `/mnt/user` |
+| Device | Drive | Size | Role | FS | Mounted as |
+|---|---|---|---|---|---|
+| Cache | Samsung 990 EVO Plus | 1 TB NVMe | appdata, Docker, VM image, write cache | btrfs | `/mnt/cache` |
+| Parity | Seagate IronWolf | 12 TB | Parity — single-drive fault tolerance | — | — |
+| Disk 1 | HGST Ultrastar | 12 TB | Array data | xfs | `/mnt/disk1` |
+| Disk 2 | Seagate IronWolf Pro | 12 TB | Array data | xfs | `/mnt/disk2` |
+| Boot | USB flash | ~119 GB | Unraid OS (boot + license) | vfat | — |
+| User share | — | ~24 TB | Unified view spanning array + cache | — | `/mnt/user` |
+
+- **Single parity:** the array tolerates **one** drive failure (a second parity slot exists but is unassigned).
+- **Cache + Mover:** writes hit the NVMe cache first; the **Mover** flushes them to the array on a nightly schedule.
 
 ---
 
@@ -134,12 +136,23 @@ Unraid pools the drives into a single parity-protected array with an SSD cache i
 
 | Layer | Detail |
 |---|---|
-| Host OS | **Unraid OS** `<version — FILL IN>` (boots from USB) |
-| Containers | Unraid's built-in **Docker** — runs the *arr* stack, `cloudflared`, and the Datadog agent |
-| Virtual machine | **Ubuntu** `<version — FILL IN>` VM (KVM), dedicated to Dokploy |
-| VM resources | `<vCPU / RAM / disk assigned — FILL IN>` |
+| Host OS | **Unraid OS 7.3** (boots from USB) |
+| Containers | Unraid's built-in **Docker** — runs the media stack, `cloudflared`, and the Datadog agent |
+| Virtual machine | An **Ubuntu** VM (KVM) dedicated to Dokploy |
 
 > **Why this split?** Unraid handles storage, Docker, and VMs natively, so the media stack runs as lightweight containers right on the host. Dokploy lives in its own Ubuntu VM so deploying and redeploying side projects can't destabilize the always-on media and storage services.
+
+### Containers
+
+Everything on Unraid Docker falls into three groups:
+
+| Group | Containers | Role |
+|---|---|---|
+| **Media stack** | Prowlarr · Sonarr · Radarr · Bazarr · FlareSolverr · Deluge (VPN) · Cleanuparr · Jellyfin · Jellyseerr | Media automation + streaming — detailed in [the *arr* media stack](#-the-arr-media-stack) |
+| **Networking** | `cloudflared` | Cloudflare Tunnel — publishes selected services with no open inbound ports (Tailscale handles admin — see [Networking](#-networking--remote-access)) |
+| **Monitoring** | Datadog agent | Host + container metrics and logs shipped to Datadog |
+
+The Ubuntu VM runs **Dokploy**, which in turn hosts various personal side projects (see [Dokploy](#dokploy)).
 
 ### Dokploy
 
@@ -148,65 +161,44 @@ Unraid pools the drives into a single parity-protected array with an SSD cache i
 | | |
 |---|---|
 | Runs on | Ubuntu VM (KVM) on the Unraid host |
-| Version | `<FILL IN>` |
-| Dashboard URL | `<FILL IN — internal only>` |
-| Deploys | Side projects — websites, an Obsidian sync server, and other small apps `<FILL IN: list>` |
-
-### Service inventory
-
-**On Unraid Docker** (always-on host services):
-
-| Service | Purpose | Image | Notes |
-|---|---|---|---|
-| *arr stack | Media automation — see [the *arr* stack](#-the-arr-media-stack) | — | `<FILL IN: versions>` |
-| `<download client>` | Fetches releases the *arr* apps request | `<FILL IN>` | qBittorrent / SABnzbd |
-| `<media server>` | Catalogs + streams the library | `<FILL IN>` | Plex / Jellyfin / Emby |
-| `cloudflared` | Cloudflare Tunnel — reverse proxy + remote access with no open inbound ports | `cloudflare/cloudflared` | see [Networking](#-networking--remote-access) |
-| Datadog agent | Metrics, logs, and container/host monitoring | `gcr.io/datadoghq/agent` | `<FILL IN: confirm image>` |
-
-> Fill the exact container names, images, and tags from the harvest output.
-
-**On the Ubuntu VM, via Dokploy** (side-project deployments):
-
-| Deployment | Purpose |
-|---|---|
-| Obsidian sync server | Self-hosted sync for Obsidian notes |
-| `<websites / other side projects>` | `<FILL IN>` |
+| Role | Deploys and manages various personal side projects (websites, an Obsidian sync server, and other small apps) |
 
 ---
 
 ## 🎬 The *arr* media stack
 
-The *"arr"* apps are a family of self-hosted tools that automate the whole media pipeline. Each does one job and talks to the others. *(Keep only the ones you actually run; mark versions/URLs as internal.)*
+A family of self-hosted tools that each do one job and hand off to the next, automating the whole pipeline from request to stream:
 
-| App | What it does (in plain language) |
-|---|---|
-| **Prowlarr** | Indexer manager — the single place you configure your trackers/indexers. It syncs them out to Sonarr, Radarr, etc., so you don't set them up app-by-app. |
-| **Sonarr** | TV automation — monitors shows, grabs new episodes as they release, then renames and files them into your library. |
-| **Radarr** | Same idea as Sonarr, but for movies. |
-| **Lidarr** | Music automation. <!-- remove if not used --> |
-| **Readarr** | Books / audiobooks automation. <!-- remove if not used --> |
-| **Bazarr** | Finds and downloads subtitles for whatever Sonarr/Radarr have pulled in. |
-| **Download client** | `<qBittorrent / SABnzbd>` — actually fetches the files the *arr* apps request. |
-| **Media server** | `<Plex / Jellyfin / Emby>` — catalogs the library and streams it to your devices. |
-| **Requests** | `<Overseerr / Jellyseerr>` — a friendly front-end where users request titles, which get handed to Sonarr/Radarr. <!-- remove if not used --> |
+| App | Container / image | What it does (in plain language) |
+|---|---|---|
+| **Prowlarr** | `binhex/arch-prowlarr` | Indexer manager — the single place to configure trackers/indexers; syncs them out to Sonarr & Radarr so you don't set them up app-by-app. |
+| **Sonarr** | `binhex/arch-sonarr` | TV automation — monitors shows, grabs new episodes as they release, then renames and files them into the library. |
+| **Radarr** | `binhex/arch-radarr` | Same idea as Sonarr, but for movies. |
+| **Bazarr** | `linuxserver/bazarr` | Finds and downloads subtitles for whatever Sonarr/Radarr pull in. |
+| **FlareSolverr** | `binhex/arch-flaresolverr` | Proxy that solves Cloudflare / CAPTCHA challenges so indexers stay reachable. |
+| **Deluge (+ VPN)** | `binhex/arch-delugevpn` | The BitTorrent download client. Its traffic is routed through a **built-in PIA VPN** — everything is tunneled, and downloads stop rather than leak if the VPN drops. |
+| **Cleanuparr** | `cleanuparr/cleanuparr` | Housekeeping for the queue — auto-removes stalled, failed, or orphaned downloads (and blocklists bad releases) so the *arr* apps keep retrying cleanly. |
+| **Jellyfin** | `jellyfin/jellyfin` | Open-source media server — catalogs the library and streams it to your devices. |
+| **Jellyseerr** | `fallenbagel/jellyseerr` | Request front-end — a friendly UI where users request titles, which get handed to Sonarr/Radarr. |
+
+> Most *arr* apps use [**binhex**](https://github.com/binhex) image variants; Bazarr uses [**LinuxServer**](https://www.linuxserver.io/).
 
 ### How the automation flows
 
 ```mermaid
 sequenceDiagram
-  participant U as You / Requests app
+  participant U as User / Jellyseerr
   participant ARR as Sonarr / Radarr
   participant P as Prowlarr
-  participant DL as Download client
-  participant M as Media server
+  participant DL as Deluge (via PIA VPN)
+  participant M as Jellyfin
 
-  U->>ARR: Add / request a title
+  U->>ARR: Request a title
   ARR->>P: Search configured indexers
   P-->>ARR: Best matching release
   ARR->>DL: Send to download client
   DL-->>ARR: Download complete
-  ARR->>ARR: Rename + move into library
+  ARR->>ARR: Rename + import into library
   ARR->>M: Library updated
   M-->>U: Available to stream
 ```
@@ -215,46 +207,41 @@ sequenceDiagram
 
 ## 🌐 Networking & remote access
 
-<!-- FILL IN — keep sensitive values out if this repo goes public; see Security checklist -->
-
 | Item | Detail |
 |---|---|
-| LAN | 2.5 GbE (onboard) |
-| Reverse proxy / remote access | **Cloudflare Tunnel** via a `cloudflared` container — exposes selected services without opening any inbound ports on the router |
-| Domains / DNS | Cloudflare `<FILL IN — domain(s)>` |
+| LAN | 2.5 GbE onboard, bonded |
+| Published services | **Cloudflare Tunnel** via a `cloudflared` container — selected services are reachable externally with **no inbound ports opened** on the router |
+| Remote admin | **Tailscale** — a private mesh VPN for administering the box remotely |
 | TLS / certificates | Terminated at Cloudflare's edge |
-| Internet-exposed services | `<FILL IN — which hostnames are routed through the tunnel>` |
+
+> Specific IPs, domains, and tunnel hostnames are deliberately kept out of this public repo — see [What's intentionally omitted](#-whats-intentionally-omitted).
 
 ---
 
 ## 🗂 Storage & media library layout
 
-Unraid exposes everything through **user shares** (`/mnt/user/...`) that span the cache and the array:
+Unraid exposes everything through **user shares** (`/mnt/user/...`) that span the cache and the array. A representative layout:
 
 ```text
 /mnt/user
-├── media/        # movies, tv, music — flushed to the array
+├── media/        # movies, tv — served by Jellyfin from the array
 ├── downloads/    # active downloads — kept on cache for speed
-└── appdata/      # per-container config — kept on cache
+├── appdata/      # per-container config — kept on cache
+└── system/       # docker.img / libvirt.img
 ```
 
-- **Cache + Mover:** writes land on the 1 TB NVMe cache for speed; Unraid's **Mover** flushes `media/` to the parity-protected array on a nightly schedule. `appdata/` and `downloads/` are typically kept cache-only.
-- **Hardlinks / atomic moves:** keep the download and media paths inside the **same Unraid user share** so imports are instant hardlinks instead of slow cross-share copies.
-- **Shares:** `<SMB / NFS exports, if any — FILL IN>`
+- **Cache + Mover:** writes land on the 1 TB NVMe cache for speed; Unraid's **Mover** flushes media to the parity-protected array on a nightly schedule. `appdata` and active downloads stay cache-resident.
+- **Hardlinks / atomic moves:** the download and media paths live inside the **same Unraid user share** so imports are instant hardlinks instead of slow cross-share copies.
 
 ---
 
 ## 💾 Backups & data safety
 
-<!-- FILL IN — this is the "future-you" section -->
+Unraid **parity** protects the array against a single-drive failure — but parity is not a backup, and the data that actually hurts to lose is configuration, not media:
 
-| What | Where | Frequency | Restore steps |
-|---|---|---|---|
-| Container configs / appdata | `<FILL IN>` | `<FILL IN>` | `<FILL IN>` |
-| Dokploy state | `<FILL IN>` | `<FILL IN>` | `<FILL IN>` |
-| VM snapshots | `<FILL IN>` | `<FILL IN>` | `<FILL IN>` |
-
-> Media files themselves are typically **not** backed up (re-acquirable); configs and databases are what hurt to lose.
+- **`appdata` (container configs):** the per-container settings for the whole media stack, backed up so the stack can be rebuilt without reconfiguring each app from scratch.
+- **Dokploy state:** the VM and its deployment configuration.
+- **Media files** are intentionally **not** backed up — they're re-acquirable, and backing up tens of terabytes isn't practical.
 
 ---
 
@@ -265,9 +252,9 @@ Most day-to-day management happens in the **Unraid web UI** (Dashboard, Main, Do
 ```bash
 # Hardware (run on the Unraid host)
 lscpu                                              # CPU
-free -h                                             # RAM
-lsblk -o NAME,SIZE,TYPE,MODEL,MOUNTPOINT            # disks
-cat /etc/unraid-version && uname -r                 # Unraid + kernel
+free -h                                            # RAM
+lsblk -o NAME,SIZE,TYPE,MODEL,MOUNTPOINT           # disks
+cat /etc/unraid-version && uname -r                # Unraid + kernel
 
 # Containers (Unraid host)
 docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
@@ -276,9 +263,8 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
 **Routine tasks:**
 
 - **Update containers:** Unraid **Docker** tab → check for updates / apply (host services); **Dokploy** redeploy for VM-hosted side projects.
-- **Array / Mover:** Mover runs nightly on a schedule (Settings → Scheduler); parity checks run on Unraid's schedule.
-- **Monitoring / dashboards:** **Datadog** (agent container on Unraid) plus the built-in Unraid Dashboard. `<FILL IN — Datadog dashboard link(s) if any>`
-- **Common gotchas:** `<FILL IN>`
+- **Array / Mover:** the Mover runs nightly on a schedule (Settings → Scheduler); parity checks run on Unraid's schedule.
+- **Monitoring:** **Datadog** (agent container) for metrics and logs, plus the built-in Unraid Dashboard.
 
 ---
 
@@ -286,26 +272,26 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
 
 High-level steps to rebuild from scratch:
 
-1. Flash **Unraid** to a USB stick, boot, apply the license, and configure the array: assign **1 parity + 2 data** 12 TB drives and the 1 TB NVMe as **cache**.
-2. Enable Docker; install the **\*arr stack**, download client, media server, `cloudflared`, and the **Datadog agent** (via Unraid Community Apps).
-3. Set up the **Cloudflare Tunnel** and route the chosen hostnames through `cloudflared`.
+1. Flash **Unraid** to a USB stick, boot, apply the license, and configure the array: assign **1 parity + 2 data** 12 TB drives and the 1 TB NVMe as **cache** (btrfs).
+2. Enable Docker; install the media stack (**Prowlarr, Sonarr, Radarr, Bazarr, FlareSolverr, Deluge+VPN, Cleanuparr, Jellyfin, Jellyseerr**), `cloudflared`, and the **Datadog agent** via Unraid Community Apps.
+3. Set up the **Cloudflare Tunnel** (publish services) and **Tailscale** (remote admin).
 4. Create the **Ubuntu VM** (KVM); install Docker + **Dokploy**.
-5. Redeploy side projects (websites, Obsidian sync, …) through the Dokploy dashboard.
+5. Redeploy side projects through the Dokploy dashboard.
 6. Restore `appdata` and Dokploy state from backup.
 
 ---
 
-## 🔒 Security checklist
+## 🔒 What's intentionally omitted
 
-Run through this **before making the repo public**:
+This repo is public, so anything that would help someone reach or attack the server is deliberately left out:
 
-- [ ] No real public IPs / WAN addresses; internal IPs scrubbed if sensitive
-- [ ] No real domain names / DDNS hostnames you don't want indexed
-- [ ] No API keys, passwords, tokens, or `.env` contents (every *arr* app and Dokploy use API keys)
-- [ ] No exact exposed-port → service mapping for anything internet-facing
-- [ ] Screenshots cropped/redacted (usernames, library contents, IPs)
-- [ ] `.gitignore` confirmed to exclude real compose/env files
-- [ ] Media library examples are generic
+- Public/WAN and internal LAN IP addresses; Tailscale addresses
+- Domain names and the hostnames routed through the Cloudflare Tunnel
+- API keys, passwords, tokens, and `.env` contents (every *arr* app, Deluge/PIA, Dokploy, and the Datadog agent use them)
+- Exact port mappings for anything reachable from outside
+- Personal Unraid share names
+
+`.gitignore` excludes real env/compose files so secrets can't be committed by accident.
 
 ---
 
