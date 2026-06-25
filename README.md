@@ -87,23 +87,28 @@ All component specs below are verified against manufacturer/retailer documentati
 | Component | Spec | Notes |
 |---|---|---|
 | **CPU** | Intel Core Ultra 7 265K | 20 cores (8 P + 12 E), **20 threads — no Hyperthreading**. 3.9 GHz base / 5.5 GHz boost. LGA1851. 125 W base / 250 W max turbo. |
-| **CPU cooler** | Noctua NH-L9x65 | Low-profile air cooler. LGA1851 supported. ⚠️ Rated ~95 W class — see [thermal note](#-a-note-on-cooling) below. |
+| **CPU cooler** | Noctua NH-L9x65 (Brown, 65 mm) | Premium low-profile air cooler. LGA1851 supported. CPU power-limited in BIOS to stay within its envelope — see [cooling & airflow](#-cooling--airflow) below. |
 | **Motherboard** | MSI PRO B860M-A WIFI | Intel B860 chipset, Micro-ATX, LGA1851. 4× DDR5 DIMM (up to 256 GB). Onboard 2.5 GbE + Wi-Fi. |
 | **Memory** | G.Skill Ripjaws S5 32 GB (2×16 GB) | DDR5-5600, CL36. |
 | **Boot / app storage** | Samsung 990 EVO Plus 1 TB | M.2-2280 NVMe. Hybrid **PCIe 4.0 ×4 / 5.0 ×2** (~7,150 MB/s ceiling — not a true Gen5 ×4 drive). |
 | **Media storage** | 12 TB 3.5" HDD | Bulk media library. <!-- FILL IN: make/model, RPM, NAS-rated? --> |
 | **Power supply** | Lian Li SP850 | 850 W, 80+ Gold, fully modular, **SFX** form factor. |
-| **Case** | Jonsbo N4 | Micro-ATX NAS chassis. 6× 3.5" (4 hot-swap + 2 fixed) + 2× 2.5" = 8 bays. Takes SFX PSU. |
-| **Case fan** | Noctua NF-A12x25 PWM chromax.black.swap | 120 mm. |
+| **Case** | Jonsbo N4 | Micro-ATX NAS chassis. 6× 3.5" (4 hot-swap + 2 fixed) + 2× 2.5" = 8 bays. Takes SFX PSU. ⚠️ Poor stock ventilation — see [airflow mod](#-cooling--airflow). |
+| **Case fans** | Noctua NF-A12x25 PWM chromax.black.swap (120 mm)<br/>2× ARCTIC P12 Slim PWM PST (120 mm) | Slim front fans added via a 3D-printed adapter — see below. |
 
-#### ⚠️ A note on cooling
+### ❄️ Cooling & airflow
 
-The Noctua NH-L9x65 is a low-profile cooler designed for ~35–95 W SFF builds, while the Core Ultra 7 265K can pull up to **250 W** at full turbo. Under sustained multi-core load the CPU will reach throttling temperatures with this cooler. For a server workload, either:
+This build had two cooling considerations, both addressed:
 
-- Cap **PL1/PL2 power limits** in BIOS (e.g. ~95–125 W) — recommended for a quiet, always-on box that doesn't need peak burst performance, **or**
-- Move to a taller cooler if the chassis allows.
+**1. CPU thermal envelope.** The Noctua NH-L9x65 is a low-profile cooler designed for ~35–95 W SFF builds, while the Core Ultra 7 265K can pull up to **250 W** at full turbo. To keep temperatures in check on an always-on server, the CPU is **power-limited (PL1/PL2) in BIOS** rather than left at stock turbo — a quiet-and-cool trade-off that gives up peak burst performance the server doesn't need. The cooler fits the LGA1851 socket fine; this is purely a heat-headroom choice.
 
-This is a heat-headroom trade-off, **not** a compatibility problem — the cooler fits the socket fine.
+**2. Case ventilation.** The Jonsbo N4 ships with minimal airflow — a single fan in the **bottom** of the chassis and no intake up front. To pull cool air across the drives and components, **two slim 120 mm fans (ARCTIC P12 Slim PWM PST)** were added to the **front**, mounted with a **3D-printed slim-fan front adapter** ([SLIM Fans Front Adapter for Jonsbo N4 on eBay](https://www.ebay.com/itm/406224064291)). The P12 Slim's extra-thin profile is what makes it fit the front of this case where a standard 25 mm fan wouldn't.
+
+<div align="center">
+  <img src="assets/jonsbo-n4-build.png" alt="The home server: a wood-fronted compute case stacked on top of the black Jonsbo N4 NAS chassis with its perforated front panel" width="600" />
+  <br />
+  <sub>The Jonsbo N4 (black, bottom) with its perforated front panel.</sub>
+</div>
 
 ### Storage layout
 
