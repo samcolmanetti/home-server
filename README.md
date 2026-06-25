@@ -37,12 +37,12 @@
 
 ## 🔭 Overview
 
-This box does two jobs:
+The host runs **[Unraid OS](https://unraid.net)** — a NAS/server OS built around a flexible, parity-protected storage array with first-class Docker and VM support. On top of it, the server does two jobs:
 
-1. **Media automation** — a suite of self-hosted apps (the *"arr"* stack) that find, download, organize, and stream media automatically.
-2. **App hosting** — an Ubuntu VM running [**Dokploy**](#dokploy), an open-source self-hostable platform that deploys and manages Docker apps and databases from a single dashboard (think a self-hosted Heroku/Vercel).
+1. **Media automation + services** — the *"arr"* stack runs directly in **Unraid's Docker**, automatically finding, downloading, organizing, and streaming media. Alongside it, a **`cloudflared`** container provides the reverse proxy / remote access via Cloudflare Tunnel, and a **Datadog agent** container handles monitoring.
+2. **App hosting** — a single **Ubuntu VM** runs [**Dokploy**](#dokploy) (a self-hostable Heroku/Vercel), which deploys side projects: websites, an Obsidian sync server, and similar.
 
-It lives in a compact [Jonsbo N4](#system-summary) NAS chassis with hot-swap drive bays, built around an Intel Core Ultra 7 platform.
+Storage is a **3× 12 TB** parity-protected Unraid array fronted by a 1 TB NVMe **cache** drive — writes land on the SSD and Unraid's **Mover** flushes them to the array nightly. Everything lives in a compact [Jonsbo N4](#system-summary) NAS chassis.
 
 ---
 
@@ -50,31 +50,34 @@ It lives in a compact [Jonsbo N4](#system-summary) NAS chassis with hot-swap dri
 
 ```mermaid
 flowchart TB
-  subgraph HOST["🖥 Physical host — Jonsbo N4"]
-    HW["Intel Core Ultra 7 265K · 32 GB DDR5"]
-    HW --> OS["Host OS / hypervisor<br/>(FILL IN)"]
+  subgraph HOST["🖥 Unraid host — Jonsbo N4"]
+    HW["Core Ultra 7 265K · 32 GB DDR5"] --> UNRAID["Unraid OS"]
+
+    subgraph DOCKER["🐳 Unraid Docker"]
+      ARR["*arr stack<br/>Prowlarr · Sonarr · Radarr …"]
+      CF["cloudflared<br/>(Cloudflare Tunnel)"]
+      DD["Datadog agent"]
+    end
+
+    subgraph KVM["🧩 Ubuntu VM (KVM)"]
+      DOK["Dokploy<br/>→ websites, Obsidian sync, side projects"]
+    end
+
+    UNRAID --> DOCKER & KVM
   end
 
-  OS --> VM["Ubuntu VM"]
-  VM --> DOK["Dokploy<br/>(container orchestration UI)"]
-
-  subgraph SVC["📦 Containers"]
-    PROW["Prowlarr<br/>(indexers)"]
-    SON["Sonarr<br/>(TV)"]
-    RAD["Radarr<br/>(movies)"]
-    DL["Download client"]
-    MEDIA["Media server"]
+  subgraph STORE["💾 Storage"]
+    CACHE["Cache · 1 TB NVMe SSD<br/>(appdata + write landing)"]
+    ARRAY["Array · 2× 12 TB data + 1× 12 TB parity"]
+    CACHE -->|nightly Mover| ARRAY
   end
 
-  DOK --> SVC
-  PROW --> SON & RAD
-  SON & RAD --> DL
-  DL --> STORE[("12 TB media storage")]
-  MEDIA --> STORE
-  VM --> RP["Reverse proxy"] --> WAN((Remote access))
+  ARR --> CACHE
+  CF --> WAN((Internet /<br/>remote access))
+  DOK --> WAN
 ```
 
-> Adjust the nodes once the [service inventory](#service-inventory) is filled from the live `docker ps` output.
+> Service names get finalized once the [service inventory](#service-inventory) is filled from the live Unraid Docker list.
 
 ---
 
@@ -90,8 +93,9 @@ All component specs below are verified against manufacturer/retailer documentati
 | **CPU cooler** | Noctua NH-L9x65 (Brown, 65 mm) | Premium low-profile air cooler. LGA1851 supported. CPU power-limited in BIOS to stay within its envelope — see [cooling & airflow](#-cooling--airflow) below. |
 | **Motherboard** | MSI PRO B860M-A WIFI | Intel B860 chipset, Micro-ATX, LGA1851. 4× DDR5 DIMM (up to 256 GB). Onboard 2.5 GbE + Wi-Fi. |
 | **Memory** | G.Skill Ripjaws S5 32 GB (2×16 GB) | DDR5-5600, CL36. |
-| **Boot / app storage** | Samsung 990 EVO Plus 1 TB | M.2-2280 NVMe. Hybrid **PCIe 4.0 ×4 / 5.0 ×2** (~7,150 MB/s ceiling — not a true Gen5 ×4 drive). |
-| **Media storage** | 12 TB 3.5" HDD | Bulk media library. <!-- FILL IN: make/model, RPM, NAS-rated? --> |
+| **Cache drive** | Samsung 990 EVO Plus 1 TB | M.2-2280 NVMe. Hybrid **PCIe 4.0 ×4 / 5.0 ×2** (~7,150 MB/s ceiling). Unraid cache: appdata + write landing zone, flushed to the array nightly. |
+| **Storage array** | 3× 12 TB 3.5" HDD | Unraid array: **1 parity + 2 data** (~24 TB usable, single-drive fault tolerance). <!-- FILL IN: make/model, RPM, NAS-rated? --> |
+| **Boot device** | USB flash drive | Unraid boots from and is licensed to a USB stick. <!-- FILL IN: capacity/model (optional) --> |
 | **Power supply** | Lian Li SP850 | 850 W, 80+ Gold, fully modular, **SFX** form factor. |
 | **Case** | Jonsbo N4 | Micro-ATX NAS chassis. 6× 3.5" (4 hot-swap + 2 fixed) + 2× 2.5" = 8 bays. Takes SFX PSU. ⚠️ Poor stock ventilation — see [airflow mod](#-cooling--airflow). |
 | **Case fans** | Noctua NF-A12x25 PWM chromax.black.swap (120 mm)<br/>2× ARCTIC P12 Slim PWM PST (120 mm) | Slim front fans added via a 3D-printed adapter — see below. |
@@ -112,12 +116,15 @@ This build had two cooling considerations, both addressed:
 
 ### Storage layout
 
-<!-- FILL IN from `lsblk` / `df -hT` on the server -->
+Unraid pools the drives into a single parity-protected array with an SSD cache in front:
 
-| Device | Size | Type | Role | Filesystem | Mountpoint |
-|---|---|---|---|---|---|
-| `nvme0n1` | 1 TB | NVMe SSD | OS + appdata / Docker volumes | `<FILL IN>` | `/` |
-| `sda` | 12 TB | HDD | Media library | `<FILL IN>` | `<FILL IN>` |
+| Device | Size | Type | Role | Mounted as |
+|---|---|---|---|---|
+| Cache | 1 TB | NVMe SSD | appdata, Docker, VM image, write cache | `/mnt/cache` |
+| Parity | 12 TB | HDD | Parity — fault tolerance, no usable capacity | — |
+| Disk 1 | 12 TB | HDD | Array data | `/mnt/disk1` |
+| Disk 2 | 12 TB | HDD | Array data | `/mnt/disk2` |
+| User share | ~24 TB | — | Unified view spanning array + cache | `/mnt/user` |
 
 ---
 
@@ -125,16 +132,14 @@ This build had two cooling considerations, both addressed:
 
 ### Host & virtualization
 
-<!-- FILL IN -->
-
 | Layer | Detail |
 |---|---|
-| Host OS / hypervisor | `<FILL IN — Proxmox / bare-metal Ubuntu / ESXi>` |
-| Guest VM | Ubuntu `<version>` |
-| Resources allocated | `<vCPU / RAM / disk assigned to the VM>` |
-| Container runtime | Docker `<version>` |
+| Host OS | **Unraid OS** `<version — FILL IN>` (boots from USB) |
+| Containers | Unraid's built-in **Docker** — runs the *arr* stack, `cloudflared`, and the Datadog agent |
+| Virtual machine | **Ubuntu** `<version — FILL IN>` VM (KVM), dedicated to Dokploy |
+| VM resources | `<vCPU / RAM / disk assigned — FILL IN>` |
 
-> **Why a VM boundary?** Running Dokploy and the containers inside a dedicated Ubuntu VM isolates the workload from the host, makes snapshots/backups clean, and lets the host be rebuilt without touching the services. <!-- adjust if running bare-metal -->
+> **Why this split?** Unraid handles storage, Docker, and VMs natively, so the media stack runs as lightweight containers right on the host. Dokploy lives in its own Ubuntu VM so deploying and redeploying side projects can't destabilize the always-on media and storage services.
 
 ### Dokploy
 
@@ -142,17 +147,31 @@ This build had two cooling considerations, both addressed:
 
 | | |
 |---|---|
+| Runs on | Ubuntu VM (KVM) on the Unraid host |
 | Version | `<FILL IN>` |
 | Dashboard URL | `<FILL IN — internal only>` |
-| Manages | `<FILL IN — which apps/databases run under Dokploy vs. plain Compose>` |
+| Deploys | Side projects — websites, an Obsidian sync server, and other small apps `<FILL IN: list>` |
 
 ### Service inventory
 
-<!-- FILL IN from `docker ps` on the server. One row per container. -->
+**On Unraid Docker** (always-on host services):
 
-| Service | Purpose | Image | Internal port | Managed by |
-|---|---|---|---|---|
-| `<name>` | `<one-line blurb>` | `<image:tag>` | `<port>` | Dokploy / Compose |
+| Service | Purpose | Image | Notes |
+|---|---|---|---|
+| *arr stack | Media automation — see [the *arr* stack](#-the-arr-media-stack) | — | `<FILL IN: versions>` |
+| `<download client>` | Fetches releases the *arr* apps request | `<FILL IN>` | qBittorrent / SABnzbd |
+| `<media server>` | Catalogs + streams the library | `<FILL IN>` | Plex / Jellyfin / Emby |
+| `cloudflared` | Cloudflare Tunnel — reverse proxy + remote access with no open inbound ports | `cloudflare/cloudflared` | see [Networking](#-networking--remote-access) |
+| Datadog agent | Metrics, logs, and container/host monitoring | `gcr.io/datadoghq/agent` | `<FILL IN: confirm image>` |
+
+> Fill the exact container names, images, and tags from the harvest output.
+
+**On the Ubuntu VM, via Dokploy** (side-project deployments):
+
+| Deployment | Purpose |
+|---|---|
+| Obsidian sync server | Self-hosted sync for Obsidian notes |
+| `<websites / other side projects>` | `<FILL IN>` |
 
 ---
 
@@ -200,32 +219,28 @@ sequenceDiagram
 
 | Item | Detail |
 |---|---|
-| LAN | 2.5 GbE (onboard) `<+ Wi-Fi?>` |
-| Static IP / hostname | `<internal — consider omitting publicly>` |
-| Reverse proxy | `<Traefik / Nginx Proxy Manager / Caddy>` |
-| Domains / DNS | `<FILL IN>` |
-| TLS / certificates | `<Let's Encrypt via … >` |
-| Remote access | `<VPN — WireGuard/Tailscale / Cloudflare Tunnel>` |
-| Internet-exposed services | `<list, or "none — VPN only">` |
+| LAN | 2.5 GbE (onboard) |
+| Reverse proxy / remote access | **Cloudflare Tunnel** via a `cloudflared` container — exposes selected services without opening any inbound ports on the router |
+| Domains / DNS | Cloudflare `<FILL IN — domain(s)>` |
+| TLS / certificates | Terminated at Cloudflare's edge |
+| Internet-exposed services | `<FILL IN — which hostnames are routed through the tunnel>` |
 
 ---
 
 ## 🗂 Storage & media library layout
 
-<!-- FILL IN -->
+Unraid exposes everything through **user shares** (`/mnt/user/...`) that span the cache and the array:
 
 ```text
-/data
-├── media
-│   ├── movies
-│   ├── tv
-│   └── music
-├── torrents      # active downloads
-└── appdata       # per-container config
+/mnt/user
+├── media/        # movies, tv, music — flushed to the array
+├── downloads/    # active downloads — kept on cache for speed
+└── appdata/      # per-container config — kept on cache
 ```
 
-- **Hardlinks / atomic moves:** `<configured? — keeps imports instant and avoids double disk usage>`
-- **Shares:** `<SMB / NFS exports, if any>`
+- **Cache + Mover:** writes land on the 1 TB NVMe cache for speed; Unraid's **Mover** flushes `media/` to the parity-protected array on a nightly schedule. `appdata/` and `downloads/` are typically kept cache-only.
+- **Hardlinks / atomic moves:** keep the download and media paths inside the **same Unraid user share** so imports are instant hardlinks instead of slow cross-share copies.
+- **Shares:** `<SMB / NFS exports, if any — FILL IN>`
 
 ---
 
@@ -245,29 +260,24 @@ sequenceDiagram
 
 ## 🛠 Maintenance & operations
 
-**Harvest live system facts** (run on the server, then fill in the tables above):
+Most day-to-day management happens in the **Unraid web UI** (Dashboard, Main, Docker, and VMs tabs). The commands below harvest the same facts over SSH for documentation.
 
 ```bash
-# Hardware
+# Hardware (run on the Unraid host)
 lscpu                                              # CPU
-free -h && sudo dmidecode -t memory                # RAM
-sudo dmidecode -t baseboard -t bios                # motherboard / BIOS
-lsblk -o NAME,SIZE,TYPE,MODEL,MOUNTPOINT && df -hT  # disks
-lspci | grep -Ei 'vga|3d|nvidia|amd'               # GPU
-ip -br addr                                         # network
-cat /etc/os-release && uname -r                     # OS / kernel
+free -h                                             # RAM
+lsblk -o NAME,SIZE,TYPE,MODEL,MOUNTPOINT            # disks
+cat /etc/unraid-version && uname -r                 # Unraid + kernel
 
-# Software / services
-docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Status}}'
-docker compose ls
-sudo ss -tlnp                                       # listening ports
+# Containers (Unraid host)
+docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
 ```
 
 **Routine tasks:**
 
-- **Update containers:** `<FILL IN — Dokploy redeploy / docker compose pull && up -d / Watchtower>`
-- **Restart a service:** `<FILL IN>`
-- **Monitoring / dashboards:** `<FILL IN — Uptime Kuma / Grafana / Glances, if any>`
+- **Update containers:** Unraid **Docker** tab → check for updates / apply (host services); **Dokploy** redeploy for VM-hosted side projects.
+- **Array / Mover:** Mover runs nightly on a schedule (Settings → Scheduler); parity checks run on Unraid's schedule.
+- **Monitoring / dashboards:** **Datadog** (agent container on Unraid) plus the built-in Unraid Dashboard. `<FILL IN — Datadog dashboard link(s) if any>`
 - **Common gotchas:** `<FILL IN>`
 
 ---
@@ -276,12 +286,12 @@ sudo ss -tlnp                                       # listening ports
 
 High-level steps to rebuild from scratch:
 
-1. `<FILL IN — install host OS / hypervisor>`
-2. `<FILL IN — create Ubuntu VM, install Docker>`
-3. `<FILL IN — install Dokploy>`
-4. `<FILL IN — deploy *arr stack + download client + media server>`
-5. `<FILL IN — wire up reverse proxy, DNS, remote access>`
-6. `<FILL IN — restore configs from backup>`
+1. Flash **Unraid** to a USB stick, boot, apply the license, and configure the array: assign **1 parity + 2 data** 12 TB drives and the 1 TB NVMe as **cache**.
+2. Enable Docker; install the **\*arr stack**, download client, media server, `cloudflared`, and the **Datadog agent** (via Unraid Community Apps).
+3. Set up the **Cloudflare Tunnel** and route the chosen hostnames through `cloudflared`.
+4. Create the **Ubuntu VM** (KVM); install Docker + **Dokploy**.
+5. Redeploy side projects (websites, Obsidian sync, …) through the Dokploy dashboard.
+6. Restore `appdata` and Dokploy state from backup.
 
 ---
 
