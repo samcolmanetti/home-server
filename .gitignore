@@ -1,0 +1,18 @@
+# Secrets & environment — never commit real values
+*.env
+.env
+.env.*
+**/secrets/**
+*secret*
+*credentials*
+
+# Compose / config files that may carry secrets (commit sanitized copies only)
+docker-compose.override.yml
+**/appdata/**
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
