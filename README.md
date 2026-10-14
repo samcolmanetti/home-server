@@ -208,7 +208,9 @@ sequenceDiagram
 
 | Item | Detail |
 |---|---|
-| LAN | 2.5 GbE onboard, bonded |
+| Router / Wi-Fi | **ASUS ZenWiFi AX (XT8, RT-AX95Q)** — AX6600 tri-band Wi-Fi 6 mesh, two nodes, AiMesh. Main node: 1× 2.5 GbE WAN, 3× 1 GbE LAN |
+| Internet | 1 Gbps fiber, ONT → XT8 2.5G WAN |
+| LAN | 2.5 GbE onboard, bonded. Links at 1 GbE, since the XT8 LAN ports are gigabit |
 | Published services | **Cloudflare Tunnel** via a `cloudflared` container. Selected services are reachable externally with **no inbound ports opened** on the router. |
 | Remote admin | **Tailscale**, a private mesh VPN for administering the box remotely |
 | TLS / certificates | Terminated at Cloudflare's edge |
